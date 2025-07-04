@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV Wikipedia Image Finder</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for Inter font and general layout */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6; /* Light gray background */
+            color: #374151; /* Dark gray text */
+        }
+        /* Style for the loading spinner */
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #6366f1; /* Indigo color */
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        /* Custom modal styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            max-width: 90%;
+            max-height: 90%;
+            overflow-y: auto;
+        }
+        /* Hide scrollbar for image containers but allow scrolling */
+        .image-scroll-container::-webkit-scrollbar {
+            display: none; /* For Chrome, Safari, and Opera */
+        }
+        .image-scroll-container {
+            -ms-overflow-style: none;  /* IE and Edge */
+            scrollbar-width: none;  /* Firefox */
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto bg-white p-6 rounded-lg shadow-xl">
+        <h1 class="text-3xl font-extrabold text-center text-indigo-700 mb-6">Wikipedia Image Finder from CSV</h1>
+
+        <!-- File Upload Section -->
+        <div class="mb-6 p-4 border border-indigo-200 rounded-md bg-indigo-50">
+            <label for="csvFile" class="block text-lg font-medium text-indigo-800 mb-2">Upload CSV File:</label>
+            <input type="file" id="csvFile" accept=".csv" class="block w-full text-sm text-gray-700
+                file:mr-4 file:py-2 file:px-4
+                file:rounded-full file:border-0
+                file:text-sm file:font-semibold
+                file:bg-indigo-500 file:text-white
+                hover:file:bg-indigo-600 cursor-pointer">
+            <p class="mt-2 text-sm text-gray-500">Please upload a CSV file (e.g., `data.csv`).</p>
+        </div>
+
+        <!-- Column Selection Section -->
+        <div id="columnSelection" class="hidden mb-6 p-4 border border-green-200 rounded-md bg-green-50">
+            <label for="columnSelect" class="block text-lg font-medium text-green-800 mb-2">Select Column for Wikipedia Search:</label>
+            <select id="columnSelect" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm rounded-md shadow-sm">
+                <!-- Options will be populated by JavaScript -->
+            </select>
+            <button id="processCsvBtn" class="mt-4 w-full md:w-auto px-6 py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition duration-150 ease-in-out">
+                Process CSV & Fetch Images
+            </button>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loadingIndicator" class="hidden flex items-center justify-center py-8">
+            <div class="spinner mr-3"></div>
+            <span class="text-lg text-indigo-600">Fetching images from Wikipedia... This might take a while.</span>
+        </div>
+
+        <!-- Result Table Section -->
+        <div id="resultTableContainer" class="hidden mt-8 overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200 shadow-lg rounded-lg">
+                <thead class="bg-gray-50">
+                    <tr id="tableHeaderRow">
+                        <!-- Headers will be populated by JavaScript -->
+                    </tr>
+                </thead>
+                <tbody id="csvTableBody" class="bg-white divide-y divide-gray-200">
+                    <!-- CSV data and images will be populated by JavaScript -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Custom Modal for Messages -->
+    <div id="customModal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h3 id="modalTitle" class="text-xl font-bold mb-4"></h3>
+            <p id="modalMessage" class="mb-6"></p>
+            <button id="modalCloseBtn" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">Close</button>
+        </div>
+    </div>
+
+    <script>
+        // Global variables for Firebase configuration and app ID (provided by the Canvas environment)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Function to show the custom modal
+        function showModal(title, message) {
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalMessage').textContent = message;
+            document.getElementById('customModal').classList.remove('hidden');
+        }
+
+        // Function to hide the custom modal
+        function hideModal() {
+            document.getElementById('customModal').classList.add('hidden');
+        }
+
+        // Event listener for the modal close button
+        document.getElementById('modalCloseBtn').addEventListener('click', hideModal);
+
+        const csvFile = document.getElementById('csvFile');
+        const columnSelection = document.getElementById('columnSelection');
+        const columnSelect = document.getElementById('columnSelect');
+        const processCsvBtn = document.getElementById('processCsvBtn');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const resultTableContainer = document.getElementById('resultTableContainer');
+        const tableHeaderRow = document.getElementById('tableHeaderRow');
+        const csvTableBody = document.getElementById('csvTableBody');
+
+        let csvData = []; // To store parsed CSV data
+        let columnHeaders = []; // To store CSV column headers
+        let imageCache = {}; // Cache for images to avoid re-fetching the same term
+
+        // Event listener for CSV file upload
+        csvFile.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    parseCSV(e.target.result);
+                };
+                reader.readAsText(file);
+            } else {
+                showModal('No File Selected', 'Please select a CSV file to upload.');
+                columnSelection.classList.add('hidden');
+                resultTableContainer.classList.add('hidden');
+                csvTableBody.innerHTML = '';
+                tableHeaderRow.innerHTML = '';
+            }
+        });
+
+        // Function to parse CSV content
+        function parseCSV(text) {
+            const lines = text.split(/\r?\n/).filter(line => line.trim() !== ''); // Split by newline and filter empty lines
+            if (lines.length === 0) {
+                showModal('Empty CSV', 'The uploaded CSV file is empty.');
+                columnSelection.classList.add('hidden');
+                return;
+            }
+
+            columnHeaders = lines[0].split(',').map(header => header.trim()); // Get headers from the first line
+            csvData = lines.slice(1).map(line => {
+                const values = line.split(',').map(value => value.trim());
+                const row = {};
+                columnHeaders.forEach((header, index) => {
+                    row[header] = values[index] || ''; // Assign values to headers, handle missing values
+                });
+                return row;
+            });
+
+            populateColumnSelect();
+            columnSelection.classList.remove('hidden');
+            resultTableContainer.classList.add('hidden'); // Hide table until processed
+            csvTableBody.innerHTML = ''; // Clear previous table data
+            tableHeaderRow.innerHTML = ''; // Clear previous headers
+        }
+
+        // Function to populate the column selection dropdown
+        function populateColumnSelect() {
+            columnSelect.innerHTML = ''; // Clear existing options
+            columnHeaders.forEach(header => {
+                const option = document.createElement('option');
+                option.value = header;
+                option.textContent = header;
+                columnSelect.appendChild(option);
+            });
+        }
+
+        // Event listener for the "Process CSV" button
+        processCsvBtn.addEventListener('click', async () => {
+            const selectedColumn = columnSelect.value;
+            if (!selectedColumn) {
+                showModal('No Column Selected', 'Please select a column to use for Wikipedia search.');
+                return;
+            }
+
+            loadingIndicator.classList.remove('hidden');
+            resultTableContainer.classList.add('hidden'); // Hide table during processing
+            csvTableBody.innerHTML = ''; // Clear previous results
+            tableHeaderRow.innerHTML = ''; // Clear previous headers
+
+            await processCsvForImages(selectedColumn);
+
+            loadingIndicator.classList.add('hidden');
+            resultTableContainer.classList.remove('hidden');
+        });
+
+        // Function to fetch images from Wikipedia for each entry
+        async function processCsvForImages(selectedColumn) {
+            const updatedHeaders = [...columnHeaders, 'Wikipedia Image Link', 'Wikipedia Images'];
+            renderTableHeader(updatedHeaders);
+
+            const rowsToRender = [];
+            for (const row of csvData) {
+                const searchTerm = row[selectedColumn];
+                let images = [];
+                let firstImageUrl = '';
+
+                if (searchTerm) {
+                    if (imageCache[searchTerm]) {
+                        images = imageCache[searchTerm].images;
+                        firstImageUrl = imageCache[searchTerm].firstImageUrl;
+                    } else {
+                        const wikiImages = await fetchWikipediaImages(searchTerm);
+                        images = wikiImages.images;
+                        firstImageUrl = wikiImages.firstImageUrl;
+                        imageCache[searchTerm] = { images, firstImageUrl };
+                    }
+                }
+
+                rowsToRender.push({
+                    originalRow: row,
+                    searchTerm,
+                    images,
+                    firstImageUrl
+                });
+            }
+            renderTableRows(rowsToRender, selectedColumn);
+        }
+
+        // Function to fetch images from Wikipedia API
+        async function fetchWikipediaImages(searchTerm) {
+            const endpoint = 'https://en.wikipedia.org/w/api.php';
+            // Query for page images (pithumbsize for a reasonable thumbnail) and original images
+            const params = new URLSearchParams({
+                action: 'query',
+                format: 'json',
+                prop: 'pageimages|images',
+                titles: searchTerm,
+                pithumbsize: 200, // Thumbnail size
+                imlimit: 10,      // Limit to 10 images
+                redirects: 1,     // Follow redirects
+                origin: '*'       // Enable CORS
+            });
+
+            try {
+                const response = await fetch(`${endpoint}?${params.toString()}`);
+                const data = await response.json();
+
+                const pages = data.query.pages;
+                const pageId = Object.keys(pages)[0];
+                const page = pages[pageId];
+
+                let allImageUrls = [];
+                let firstImageUrl = '';
+
+                // Prioritize pageimage (thumbnail)
+                if (page.thumbnail && page.thumbnail.source) {
+                    firstImageUrl = page.thumbnail.source;
+                    allImageUrls.push(page.thumbnail.source);
+                }
+
+                // Get other images if available
+                if (page.images) {
+                    // Fetch original image URLs for each image title
+                    const imageTitles = page.images.map(img => `File:${img.title.replace(/ /g, '_')}`);
+                    const imageInfoParams = new URLSearchParams({
+                        action: 'query',
+                        format: 'json',
+                        prop: 'imageinfo',
+                        iiprop: 'url',
+                        titles: imageTitles.join('|'),
+                        origin: '*'
+                    });
+
+                    const imageInfoResponse = await fetch(`${endpoint}?${imageInfoParams.toString()}`);
+                    const imageInfoData = await imageInfoResponse.json();
+
+                    const imageInfoPages = imageInfoData.query.pages;
+                    for (const imgPageId in imageInfoPages) {
+                        const imgPage = imageInfoPages[imgPageId];
+                        if (imgPage.imageinfo && imgPage.imageinfo[0] && imgPage.imageinfo[0].url) {
+                            const imageUrl = imgPage.imageinfo[0].url;
+                            // Add to allImageUrls if not already the first image
+                            if (imageUrl !== firstImageUrl) {
+                                allImageUrls.push(imageUrl);
+                            }
+                        }
+                    }
+                }
+
+                // If no pageimage, and other images exist, use the first one as primary
+                if (!firstImageUrl && allImageUrls.length > 0) {
+                    firstImageUrl = allImageUrls[0];
+                }
+
+                return { images: allImageUrls, firstImageUrl: firstImageUrl };
+
+            } catch (error) {
+                console.error(`Error fetching Wikipedia images for "${searchTerm}":`, error);
+                return { images: [], firstImageUrl: '' };
+            }
+        }
+
+
+        // Function to render the table header
+        function renderTableHeader(headers) {
+            tableHeaderRow.innerHTML = ''; // Clear previous headers
+            headers.forEach(headerText => {
+                const th = document.createElement('th');
+                th.scope = 'col';
+                th.classList.add('px-6', 'py-3', 'text-left', 'text-xs', 'font-medium', 'text-gray-500', 'uppercase', 'tracking-wider');
+                th.textContent = headerText;
+                tableHeaderRow.appendChild(th);
+            });
+        }
+
+        // Function to render the table rows
+        function renderTableRows(rowsData, selectedColumn) {
+            csvTableBody.innerHTML = ''; // Clear existing rows
+
+            rowsData.forEach((rowData, rowIndex) => {
+                const tr = document.createElement('tr');
+                tr.classList.add('hover:bg-gray-100');
+
+                // Render original CSV data
+                columnHeaders.forEach(header => {
+                    const td = document.createElement('td');
+                    td.classList.add('px-6', 'py-4', 'whitespace-nowrap', 'text-sm', 'text-gray-900');
+                    td.textContent = rowData.originalRow[header];
+                    tr.appendChild(td);
+                });
+
+                // Add Wikipedia Image Link column
+                const imageLinkTd = document.createElement('td');
+                imageLinkTd.classList.add('px-6', 'py-4', 'whitespace-nowrap', 'text-sm', 'text-blue-600');
+                if (rowData.firstImageUrl) {
+                    const link = document.createElement('a');
+                    link.href = rowData.firstImageUrl;
+                    link.target = '_blank';
+                    link.textContent = 'Link';
+                    imageLinkTd.appendChild(link);
+                } else {
+                    imageLinkTd.textContent = 'N/A';
+                }
+                tr.appendChild(imageLinkTd);
+
+                // Add Wikipedia Images column with carousel
+                const imagesTd = document.createElement('td');
+                imagesTd.classList.add('px-6', 'py-4', 'whitespace-nowrap', 'text-sm', 'text-gray-900');
+
+                if (rowData.images.length > 0) {
+                    const imageContainer = document.createElement('div');
+                    imageContainer.classList.add('flex', 'items-center', 'space-x-2');
+
+                    const imgElement = document.createElement('img');
+                    imgElement.src = rowData.firstImageUrl || 'https://placehold.co/100x100/e0e0e0/000000?text=No+Image';
+                    imgElement.alt = `Image for ${rowData.searchTerm}`;
+                    imgElement.classList.add('w-24', 'h-24', 'object-cover', 'rounded-md', 'shadow-sm');
+                    imgElement.onerror = function() {
+                        this.src = 'https://placehold.co/100x100/e0e0e0/000000?text=Image+Error';
+                    };
+
+                    const navContainer = document.createElement('div');
+                    navContainer.classList.add('flex', 'flex-col', 'items-center', 'space-y-1');
+
+                    const prevButton = document.createElement('button');
+                    prevButton.textContent = '◀';
+                    prevButton.classList.add('px-2', 'py-1', 'bg-indigo-200', 'text-indigo-800', 'rounded-full', 'hover:bg-indigo-300', 'transition', 'duration-150', 'ease-in-out', 'text-xs', 'font-bold');
+                    prevButton.disabled = rowData.images.length <= 1; // Disable if only one image
+
+                    const nextButton = document.createElement('button');
+                    nextButton.textContent = '▶';
+                    nextButton.classList.add('px-2', 'py-1', 'bg-indigo-200', 'text-indigo-800', 'rounded-full', 'hover:bg-indigo-300', 'transition', 'duration-150', 'ease-in-out', 'text-xs', 'font-bold');
+                    nextButton.disabled = rowData.images.length <= 1; // Disable if only one image
+
+                    const imageIndexSpan = document.createElement('span');
+                    imageIndexSpan.classList.add('text-xs', 'text-gray-500');
+                    let currentImageIndex = rowData.images.findIndex(url => url === rowData.firstImageUrl);
+                    if (currentImageIndex === -1 && rowData.images.length > 0) {
+                        currentImageIndex = 0; // Default to first if firstImageUrl isn't found in the list
+                    } else if (rowData.images.length === 0) {
+                        currentImageIndex = -1; // No images
+                    }
+
+                    const updateImageDisplay = () => {
+                        if (rowData.images.length > 0) {
+                            imgElement.src = rowData.images[currentImageIndex];
+                            imageIndexSpan.textContent = `${currentImageIndex + 1}/${rowData.images.length}`;
+                        } else {
+                            imgElement.src = 'https://placehold.co/100x100/e0e0e0/000000?text=No+Image';
+                            imageIndexSpan.textContent = '0/0';
+                        }
+                        prevButton.disabled = rowData.images.length <= 1 || currentImageIndex === 0;
+                        nextButton.disabled = rowData.images.length <= 1 || currentImageIndex === rowData.images.length - 1;
+                    };
+
+                    prevButton.addEventListener('click', () => {
+                        if (currentImageIndex > 0) {
+                            currentImageIndex--;
+                            updateImageDisplay();
+                        }
+                    });
+
+                    nextButton.addEventListener('click', () => {
+                        if (currentImageIndex < rowData.images.length - 1) {
+                            currentImageIndex++;
+                            updateImageDisplay();
+                        }
+                    });
+
+                    navContainer.appendChild(prevButton);
+                    navContainer.appendChild(imageIndexSpan);
+                    navContainer.appendChild(nextButton);
+
+                    imageContainer.appendChild(imgElement);
+                    if (rowData.images.length > 1) { // Only show nav if more than one image
+                        imageContainer.appendChild(navContainer);
+                    }
+                    imagesTd.appendChild(imageContainer);
+                    updateImageDisplay(); // Initial display
+                } else {
+                    const noImageText = document.createElement('span');
+                    noImageText.textContent = 'No images found';
+                    noImageText.classList.add('text-gray-500');
+                    imagesTd.appendChild(noImageText);
+                }
+                tr.appendChild(imagesTd);
+                csvTableBody.appendChild(tr);
+            });
+        }
+    </script>
+</body>
+</html>
